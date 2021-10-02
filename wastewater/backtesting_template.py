@@ -36,9 +36,9 @@ class Backtest:
 
       # Convert to numpy arrays
       X_train = X_prime.loc[:, 'Cumulative cases':'Active cases'].to_numpy()
-      X_test = self.data.loc[idx+D, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1) # Fix this (idx)
+      X_test = self.data.loc[idx+D, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1)
       Y_train = X_prime['New cases'].to_numpy()
-      Y_test = self.data.loc[idx+D, 'New cases'] # Fix this (idx)
+      Y_test = self.data.loc[idx+D, 'New cases']
 
       Y_hat = None
       if model == 'regression':

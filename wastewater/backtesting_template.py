@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
+from collections import namedtuple
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold
@@ -31,6 +32,31 @@ class Backtest:
       T = items[0]
       D = int(items[1])
 
+      X_prime, idx = self.construct_x_prime(T, D)
+
+      # Convert to numpy arrays
+      X_train = X_prime.loc[:, 'Cumulative cases':'Active cases'].to_numpy()
+      X_test = self.data.loc[idx+D, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1) # Fix this (idx)
+      Y_train = X_prime['New cases'].to_numpy()
+      Y_test = self.data.loc[idx+D, 'New cases'] # Fix this (idx)
+
+      Y_hat = None
+      if model == 'regression':
+        Y_hat = self.run_regression(X_train, Y_train, X_test)
+      else:
+        print('Please pass a model to train and evaluate.')
+      
+      self.add_prediction(Y_hat, Y_test, T, D)
+
+
+    RMSPE = self.RMSPE()
+    if output_predication_csv: self.output_csv(model)
+    return RMSPE
+
+  def construct_x_prime(self, T, D):
+      """
+      Helper method. Returns X_prime and the index for the last row of X_prime.
+      """
       T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D)).strftime('%Y-%m-%d')
 
       # Shift the target 'New cases' up by D days
@@ -40,47 +66,21 @@ class Backtest:
       # idx is the index of the last row of X'
       idx = X_prime.index[X_prime['Date'] == T_prime].tolist()[0]
       X_prime = X_prime[0:idx+1]
+      return X_prime, idx
 
-      # Convert to numpy arrays
-      X_train = X_prime.loc[:, 'Cumulative cases':'Active cases'].to_numpy()
-      X_test = self.data.loc[idx+1, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1) # Fix this (idx)
-      Y_train = X_prime['New cases'].to_numpy()
-      Y_test = self.data.loc[idx+1, 'New cases'] # Fix this (idx)
-
-      Y_hat = None
-      if model == 'regression':
-        Y_hat = self.run_regression(X_train, Y_train, X_test)
-      else:
-        print('Please pass a model to train and evaluate.')
-      
-      self.add_prediction(Y_hat, Y_test, T, D)
-      
-
-    RMSPE = self.RMSPE()
-    if output_predication_csv: self.output_csv(model)
-    return RMSPE
-
-  def run_regression(self, X_train, Y_train, X_test) -> float:
-    """
-    Returns a prediction using standard linear regression
-    """
-    model = LinearRegression()
-    model.fit(X_train, Y_train)
-    Y_hat = model.predict(X_test)[0]
-    return Y_hat
-
-  def evaluate_model(self, X, num = 4) -> list:
+  def train_test_sets(self, X, num = 4) -> list:
     """
     Helper function. Returns a list of tuples containg the data frame X split num ways
     Output: [(X_train, X_test) ...]
     """
+    TrainTest = namedtuple('TrainTest', 'train test')
     output = list()
     kf = KFold(n_splits = num)
     kf.get_n_splits(X)
     for train_index, test_index in kf.split(X):
       X_train = X.iloc[train_index]
       X_test = X.iloc[test_index]
-      output.append((X_train, X_test))
+      output.append(TrainTest(X_train, X_test))
     return output
 
   def RMSPE(self) -> float:
@@ -109,8 +109,15 @@ class Backtest:
     self.predictions.loc[idx,'Count'] = Y_hat
     self.predictions.loc[idx,'Actual'] = Y_test
   
-  def get_sample_data(self):
-    pass
+  def get_sample_data(self, signature):
+    """
+    Returns the X' dataset based on the signature 'YYYY-MM-DD:PD'.
+    Can be used for benchmarking, tuning, and implementing models.
+    """
+    items = signature.split(':')
+    T = items[0]
+    D = int(items[1])
+    return self.construct_x_prime(T, D)[0]
 
   def output_csv(self, model):
     file = f'{model}_predictions.csv'
@@ -123,8 +130,18 @@ class Backtest:
     output_to_upload = self.predictions[['Date:Delay', 'Count']]
     output_to_upload.to_csv(full_path, index=False)
 
-
+  def run_regression(self, X_train, Y_train, X_test) -> float:
+    """
+    Returns a prediction using standard linear regression
+    """
+    model = LinearRegression()
+    model.fit(X_train, Y_train)
+    Y_hat = model.predict(X_test)[0]
+    return Y_hat
 
 model = Backtest()
 RMSPE = model(output_predication_csv = False, model='regression')
 print(f'RMSPE: {RMSPE}')
+
+X_prime = model.get_sample_data('2021-08-14:3')
+print(model.train_test_sets(X_prime)[0].train) # Prints the train set of the first fold

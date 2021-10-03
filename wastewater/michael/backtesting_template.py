@@ -11,12 +11,12 @@ class Backtest:
   Runs backtesting on the provided data for a supplied model and provides help er methods.
   """
   def __init__(self):
-    self.data = pd.read_csv('data/BC_COVID_CASES_Cases.csv')
-    self.wastewater_data = pd.read_csv('data/BC_COVID_CASES_Wastewater.csv')
+    self.data = pd.read_csv('../data/BC_COVID_CASES_Cases.csv')
+    self.wastewater_data = pd.read_csv('../data/BC_COVID_CASES_Wastewater.csv')
     self.join_wastewater_data()
     self.clean_data()
-    self.predictions_info = pd.read_csv('data/predictions.csv')['Date:Delay'].to_list()
-    self.predictions = pd.read_csv('data/predictions.csv')
+    self.predictions_info = pd.read_csv('../data/predictions.csv')['Date:Delay'].to_list()
+    self.predictions = pd.read_csv('../data/predictions.csv')
     self.predictions['Actual'] = 0 #For calculating RMSPE
 
   def __call__(self, output_predication_csv = False, **kwargs):
@@ -152,9 +152,10 @@ class Backtest:
     Y_hat = model.predict(X_test)[0]
     return Y_hat
 
-model = Backtest()
+# model = Backtest()
 # RMSPE = model(output_predication_csv = False, model='regression')
 # print(f'RMSPE: {RMSPE}')
 
 # X_prime = model.get_sample_data('2021-08-14:3')
 # print(model.train_test_sets(X_prime)[0].train) # Prints the train set of the first fold
+

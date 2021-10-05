@@ -4,6 +4,9 @@ import os
 from collections import namedtuple
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import Lasso
+from sklearn.preprocessing import PolynomialFeatures
 from sklearn.model_selection import KFold
 
 class Backtest:
@@ -19,7 +22,7 @@ class Backtest:
     self.predictions = pd.read_csv('../data/predictions.csv')
     self.predictions['Actual'] = 0 #For calculating RMSPE
 
-  def __call__(self, output_predication_csv = False, **kwargs):
+  def __call__(self, output_predication_csv=False, alpha=None, poly=2, **kwargs):
     """
     Backtests model for every prediction.
     No forward contamination
@@ -32,6 +35,7 @@ class Backtest:
     try:
       model = kwargs['model']
       days = kwargs['days']
+      features = kwargs['features']
     except KeyError:
       print('Required argument is missing')
       return None
@@ -44,8 +48,8 @@ class Backtest:
       X_prime, idx = self.construct_x_prime(T, D)
 
       # Convert to numpy arrays
-      X_train = X_prime.loc[:, 'Cumulative cases':'Active cases']
-      X_test = self.data.loc[idx+1, 'Cumulative cases':'Active cases']
+      X_train = X_prime.loc[:, features]
+      X_test = self.data.loc[idx+1, features]
       Y_train = X_prime['New cases']
       Y_test = self.data.loc[idx+D+1, 'New cases']
 
@@ -61,7 +65,13 @@ class Backtest:
 
       Y_hat = None
       if model == 'regression':
-        Y_hat = self.run_regression(X_train, Y_train, X_test, days)
+        Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=LinearRegression())
+      elif model == 'ridge_regression':
+        Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=Ridge(alpha=alpha))
+      elif model == 'lasso_regression':
+        Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=Lasso(alpha=alpha, tol=0.01))
+      elif model == 'polynomial_regression':
+        Y_hat = self.run_polynomial_regression(X_train, Y_train, X_test, days, poly)
       else:
         print('Please pass a model to train and evaluate.')
       
@@ -183,7 +193,7 @@ class Backtest:
     output_to_upload = self.predictions
     output_to_upload.to_csv(full_path, index=False)
 
-  def run_regression(self, X_train, Y_train, X_test, days) -> float:
+  def run_regression(self, X_train, Y_train, X_test, days, model) -> float:
     """
     Returns a prediction using standard linear regression
     """
@@ -195,15 +205,31 @@ class Backtest:
     X_test = X_test.to_numpy().reshape(1, -1)
     Y_train = Y_train.to_numpy()
 
-    model = LinearRegression()
     model.fit(X_train, Y_train)
     Y_hat = model.predict(X_test)[0]
     return Y_hat
 
+  def run_polynomial_regression(self, X_train, Y_train, X_test, days, poly) -> float:
+    if days: 
+      X_train = X_train.tail(days)
+      Y_train = Y_train.tail(days)
 
-model = Backtest()
-RMSPE = model(output_predication_csv=True, model='regression', days=None)
-print(RMSPE)
+    # print(X_train)
+    # print(Y_train)
+    X_train = X_train.to_numpy()
+    X_test = X_test.to_numpy().reshape(1, -1)
+
+    poly_reg = PolynomialFeatures(degree=poly)
+    X_train_poly = poly_reg.fit_transform(X_train)
+    X_test_poly = poly_reg.fit_transform(X_test)
+    model = LinearRegression()
+
+    model.fit(X_train_poly, Y_train)
+    Y_hat = model.predict(X_test_poly)[0]
+    return Y_hat
+
+# model = Backtest()
+
 # print(RMSPE)
 # for day in range(7,30):
 #   RMSPE = model(output_predication_csv=False, model='regression', days=day)

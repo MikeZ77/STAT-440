@@ -28,7 +28,14 @@ class Backtest:
     2. Get the T - D day and create X_prime
     3. From the original data test against T
     """
-    model = kwargs['model']
+    # Manage arguments
+    try:
+      model = kwargs['model']
+      days = kwargs['days']
+    except KeyError:
+      print('Required argument is missing')
+      return None
+
     for items in self.predictions_info:
       items = items.split(':')
       T = items[0]
@@ -37,19 +44,28 @@ class Backtest:
       X_prime, idx = self.construct_x_prime(T, D)
 
       # Convert to numpy arrays
-      X_train = X_prime.loc[:, 'Cumulative cases':'Active cases'].to_numpy()
-      X_test = self.data.loc[idx+D, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1)
-      Y_train = X_prime['New cases'].to_numpy()
-      Y_test = self.data.loc[idx+D, 'New cases']
+      X_train = X_prime.loc[:, 'Cumulative cases':'Active cases']
+      X_test = self.data.loc[idx+1, 'Cumulative cases':'Active cases']
+      Y_train = X_prime['New cases']
+      Y_test = self.data.loc[idx+D+1, 'New cases']
+
+      
+      ########################################
+      # if T == '2020-04-01' and D == 1:
+      #   print(X_train)
+      #   print(Y_train)
+      #   print(X_test)
+      #   print(Y_test)
+      #   break
+      ########################################
 
       Y_hat = None
       if model == 'regression':
-        Y_hat = self.run_regression(X_train, Y_train, X_test)
+        Y_hat = self.run_regression(X_train, Y_train, X_test, days)
       else:
         print('Please pass a model to train and evaluate.')
       
       self.add_prediction(Y_hat, Y_test, T, D)
-
 
     RMSPE = self.RMSPE()
     if output_predication_csv: self.output_csv(model)
@@ -59,7 +75,7 @@ class Backtest:
       """
       Helper method. Returns X_prime and the index for the last row of X_prime.
       """
-      T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D)).strftime('%Y-%m-%d')
+      T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D+1)).strftime('%Y-%m-%d')
 
       # Shift the target 'New cases' up by D days
       X_prime = self.data.copy() 
@@ -105,10 +121,34 @@ class Backtest:
     """
     Cleans the given data set.
     Methodology:
-    1. Missing data on the first 17 days are zero'd.
-    2. Forward fill is performed on the remaining missing days (weekends)
-    3. Zero all missing data for watewater
+    1. For the wastewater data, 0 seems to be equivilent to NaN
+    2. Forward fill all values
+    3. Only NaN is left, so set them to 0
+    4. Try changing cummulative features to daily, set adjustments to zero
     """
+    # cummulative = [
+    #   'Cumulative cases',
+    #   'Cumulative Vancouver Coastal',
+    #   'Cumulative Fraser Health',
+    #   'Cumulative Island Health ',
+    #   'Cumulative Interior Health',
+    #   'Cumulative Northern Health',
+    #   'Recovered'
+    # ]
+
+    # self.data.loc[:, 'Annacis Island':'Northwest Langley'] = self.data.loc[:, 'Annacis Island':'Northwest Langley'].replace(0, np.nan)
+    # self.data[cummulative] = self.data[cummulative].diff()
+    # self.data.loc[0,'Cumulative cases':'Cumulative Vancouver Coastal'] = 1
+    # self.data = self.data.fillna(method='ffill')
+    # self.data = self.data.fillna(value=0)
+
+    # # Clear the last row from fill forward
+    # self.data.loc[self.data.shape[0]-1,'New cases':] = np.nan
+    
+    # # There are small adjustments/corrections in the cummulative data.
+    # numbers = self.data._get_numeric_data()
+    # numbers[numbers < 0] = 0
+
     self.data.loc[:, 'Annacis Island':'Northwest Langley'] = self.data.loc[:, 'Annacis Island':'Northwest Langley'].fillna(value=0)
     self.data = self.data.fillna(method='ffill')
     self.data = self.data.fillna(value=0)
@@ -140,21 +180,34 @@ class Backtest:
       os.mkdir(folder)
     full_path = os.path.join(folder, file)   
 
-    output_to_upload = self.predictions[['Date:Delay', 'Count']]
+    output_to_upload = self.predictions
     output_to_upload.to_csv(full_path, index=False)
 
-  def run_regression(self, X_train, Y_train, X_test) -> float:
+  def run_regression(self, X_train, Y_train, X_test, days) -> float:
     """
     Returns a prediction using standard linear regression
     """
+    if days: 
+      X_train = X_train.tail(days)
+      Y_train = Y_train.tail(days)
+    
+    X_train = X_train.to_numpy()
+    X_test = X_test.to_numpy().reshape(1, -1)
+    Y_train = Y_train.to_numpy()
+
     model = LinearRegression()
     model.fit(X_train, Y_train)
     Y_hat = model.predict(X_test)[0]
     return Y_hat
 
-# model = Backtest()
-# RMSPE = model(output_predication_csv = False, model='regression')
-# print(f'RMSPE: {RMSPE}')
+
+model = Backtest()
+RMSPE = model(output_predication_csv=True, model='regression', days=None)
+print(RMSPE)
+# print(RMSPE)
+# for day in range(7,30):
+#   RMSPE = model(output_predication_csv=False, model='regression', days=day)
+#   print(f'day: {day} RMSPE: {RMSPE}')
 
 # X_prime = model.get_sample_data('2021-08-14:3')
 # print(model.train_test_sets(X_prime)[0].train) # Prints the train set of the first fold

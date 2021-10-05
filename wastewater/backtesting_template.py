@@ -38,9 +38,19 @@ class Backtest:
 
       # Convert to numpy arrays
       X_train = X_prime.loc[:, 'Cumulative cases':'Active cases'].to_numpy()
-      X_test = self.data.loc[idx+D, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1)
+      X_test = self.data.loc[idx+1, 'Cumulative cases':'Active cases'].to_numpy().reshape(1, -1)
       Y_train = X_prime['New cases'].to_numpy()
-      Y_test = self.data.loc[idx+D, 'New cases']
+      Y_test = self.data.loc[idx+D+1, 'New cases']
+
+      
+      ############ DEBUG #####################
+      # if T == '2020-04-01' and D == 1:
+      #   print(X_train)
+      #   print(Y_train)
+      #   print(X_test)
+      #   print(Y_test)
+      #   break
+      ########################################
 
       Y_hat = None
       if model == 'regression':
@@ -50,7 +60,6 @@ class Backtest:
       
       self.add_prediction(Y_hat, Y_test, T, D)
 
-
     RMSPE = self.RMSPE()
     if output_predication_csv: self.output_csv(model)
     return RMSPE
@@ -59,7 +68,7 @@ class Backtest:
       """
       Helper method. Returns X_prime and the index for the last row of X_prime.
       """
-      T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D)).strftime('%Y-%m-%d')
+      T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D+1)).strftime('%Y-%m-%d')
 
       # Shift the target 'New cases' up by D days
       X_prime = self.data.copy() 
@@ -153,8 +162,8 @@ class Backtest:
     return Y_hat
 
 model = Backtest()
-# RMSPE = model(output_predication_csv = False, model='regression')
-# print(f'RMSPE: {RMSPE}')
+RMSPE = model(output_predication_csv = False, model='regression')
+print(f'RMSPE: {RMSPE}')
 
 # X_prime = model.get_sample_data('2021-08-14:3')
 # print(model.train_test_sets(X_prime)[0].train) # Prints the train set of the first fold

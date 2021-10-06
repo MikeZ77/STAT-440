@@ -7,7 +7,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
 from sklearn.linear_model import Lasso
 from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import SplineTransformer
+from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import KFold
+from xgboost import XGBRegressor
 
 class Backtest:
   """
@@ -22,7 +25,7 @@ class Backtest:
     self.predictions = pd.read_csv('../data/predictions.csv')
     self.predictions['Actual'] = 0 #For calculating RMSPE
 
-  def __call__(self, output_predication_csv=False, alpha=None, poly=2, **kwargs):
+  def __call__(self, output_predication_csv=False, alpha=None, poly=2, hyper_params=None, **kwargs):
     """
     Backtests model for every prediction.
     No forward contamination
@@ -72,6 +75,10 @@ class Backtest:
         Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=Lasso(alpha=alpha, tol=0.01))
       elif model == 'polynomial_regression':
         Y_hat = self.run_polynomial_regression(X_train, Y_train, X_test, days, poly)
+      elif model == 'spline':
+        Y_hat = self.run_spline(X_train, Y_train, X_test, days)
+      elif model == 'xg_boost':
+        Y_hat = self.run_xg_boost(X_train, Y_train, X_test, hyper_params)
       else:
         print('Please pass a model to train and evaluate.')
       
@@ -190,7 +197,7 @@ class Backtest:
       os.mkdir(folder)
     full_path = os.path.join(folder, file)   
 
-    output_to_upload = self.predictions
+    output_to_upload = self.predictions[['Date:Delay', 'Count']]
     output_to_upload.to_csv(full_path, index=False)
 
   def run_regression(self, X_train, Y_train, X_test, days, model) -> float:
@@ -228,7 +235,53 @@ class Backtest:
     Y_hat = model.predict(X_test_poly)[0]
     return Y_hat
 
-# model = Backtest()
+  def run_spline(self, X_train, Y_train, X_test, days) -> float:
+    if days: 
+      X_train = X_train.tail(days)
+      Y_train = Y_train.tail(days)
+
+    X_train = X_train.to_numpy()
+    X_test = X_test.to_numpy().reshape(1, -1)
+
+    model = make_pipeline(SplineTransformer(n_knots=5, degree=2), Ridge(alpha=1e-3))
+    model.fit(X_train, Y_train)
+    Y_hat = model.predict(X_test)[0]
+    return Y_hat
+
+  def run_xg_boost(self, X_train, Y_train, X_test, hyper_params) -> float:
+
+    X_train = X_train.to_numpy()
+    Y_train = Y_train.to_numpy()
+    X_test = X_test.to_numpy().reshape(1, -1)
+
+    model = XGBRegressor()
+    # model = XGBRegressor(n_estimators=hyper_params.t, max_depth=hyper_params.d, eta=hyper_params.r, subsample=hyper_params.s)
+    model.fit(X_train, Y_train)
+    Y_hat = model.predict(X_test)[0].tolist()
+    return Y_hat
+
+
+features = [
+#     'Cumulative cases',
+#     'Cumulative Vancouver Coastal',
+    'Hospitalization (Currently in hospital)',
+    'ICU (Currently in ICU)',
+    'Recovered',
+    'Deaths',
+#     'Active cases',
+#     'Annacis Island'
+]
+
+
+model = Backtest()
+
+features = [
+     'Cumulative cases',
+     'Cumulative Vancouver Coastal'
+]
+
+RMSPE = model(output_predication_csv=True, model='spline', days=34, features=features)
+print(RMSPE)
 
 # print(RMSPE)
 # for day in range(7,30):

@@ -4,3 +4,4 @@ notebook
 scikit-learn
 seaborn
 matplotlib
+xgboost

@@ -196,9 +196,9 @@ class Backtest:
   myModel = run_knn
   
 
-model = Backtest()
-RMSPE = model(output_predication_csv = True)#, myModel)
-print(f'RMSPE: {RMSPE}')
+#model = Backtest()
+#RMSPE = model(output_predication_csv = True)#, myModel)
+#print(f'RMSPE: {RMSPE}')
 
 # X_prime = model.get_sample_data('2021-08-14:3')
 # print(model.train_test_sets(X_prime)[0].train) # Prints the train set of the first fold

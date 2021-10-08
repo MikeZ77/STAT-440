@@ -1,0 +1,367 @@
+```python
+import pandas as pd
+import numpy as np
+import os
+from collections import namedtuple
+from datetime import datetime, timedelta
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import Lasso
+from sklearn.preprocessing import PolynomialFeatures
+
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import KFold
+from sklearn.svm import LinearSVR
+from sklearn.svm import SVR
+from sklearn.preprocessing import StandardScaler
+from sklearn.datasets import make_regression
+
+
+
+
+```
+
+
+```python
+class Backtest:
+    """
+    Runs backtesting on the provided data for a supplied model and provides help er methods.
+    """
+    def __init__(self):
+        self.data = pd.read_csv('BC_COVID_CASES_Cases.csv')
+        self.wastewater_data = pd.read_csv('BC_COVID_CASES_Wastewater.csv')
+        self.join_wastewater_data()
+        self.clean_data()
+        self.predictions_info = pd.read_csv('predictions.csv')['Date:Delay'].to_list()
+        self.predictions = pd.read_csv('predictions.csv')
+        self.predictions['Actual'] = 0 #For calculating RMSPE
+    
+
+    def __call__(self, output_predication_csv=False, alpha=None, poly=2, hyper_params=None, **kwargs):
+        """
+        Backtests model for every prediction.
+        No forward contamination
+        Method: 
+        1. Shift the target 'New cases' up T - D days
+        2. Get the T - D day and create X_prime
+        3. From the original data test against T
+        """
+        # Manage arguments
+        try:
+            model = kwargs['model']
+            days = kwargs['days']
+            features = kwargs['features']
+        except KeyError:
+            print('Required argument is missing')
+            return None
+
+        for items in self.predictions_info:
+            items = items.split(':')
+            T = items[0]
+            D = int(items[1])
+
+            X_prime, idx = self.construct_x_prime(T, D)
+
+            # Convert to numpy arrays
+            X_train = X_prime.loc[:, features]
+            X_test = self.data.loc[idx+1, features]
+            Y_train = X_prime['New cases']
+            Y_test = self.data.loc[idx+D+1, 'New cases']
+
+
+              ########################################
+              # if T == '2020-04-01' and D == 1:
+              #   print(X_train)
+              #   print(Y_train)
+              #   print(X_test)
+              #   print(Y_test)
+              #   break
+              ########################################
+
+            Y_hat = None
+            if model == 'regression':
+                Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=LinearRegression())
+            elif model == 'ridge_regression':
+                Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=Ridge(alpha=alpha))
+            elif model == 'lasso_regression':
+                Y_hat = self.run_regression(X_train, Y_train, X_test, days, model=Lasso(alpha=alpha, tol=0.01))
+            elif model == 'polynomial_regression':
+                Y_hat = self.run_polynomial_regression(X_train, Y_train, X_test, days, poly)
+            elif model == 'spline':
+                Y_hat = self.run_spline(X_train, Y_train, X_test, days)
+            elif model == 'xg_boost':
+                Y_hat = self.run_xg_boost(X_train, Y_train, X_test, hyper_params)
+            elif model == 'svm':
+                Y_hat = self.run_svm(X_train, Y_train, X_test, days)
+            elif model =='linsvm':
+                Y_hat = self.run_linsvm(X_train, Y_train, X_test,days)
+            else:
+                print('Please pass a model to train and evaluate.')
+
+            self.add_prediction(Y_hat, Y_test, T, D)
+
+        RMSPE = self.RMSPE()
+        if output_predication_csv: self.output_csv(model)
+        return RMSPE
+
+    def construct_x_prime(self, T, D):
+        """
+        Helper method. Returns X_prime and the index for the last row of X_prime.
+        """
+        T_prime = (datetime.strptime(T, '%Y-%m-%d') - timedelta(D+1)).strftime('%Y-%m-%d')
+
+        # Shift the target 'New cases' up by D days
+        X_prime = self.data.copy() 
+        X_prime['New cases'] = X_prime['New cases'].shift(-D)
+
+        # idx is the index of the last row of X'
+        idx = X_prime.index[X_prime['Date'] == T_prime].tolist()[0]
+        X_prime = X_prime[0:idx+1]
+        return X_prime, idx
+
+    def train_test_sets(self, X, num = 4) -> list:
+        """
+        Helper function. Returns a list of tuples containg the data frame X split num ways
+        Output: [(X_train, X_test) ...]
+        """
+        TrainTest = namedtuple('TrainTest', 'train test')
+        output = list()
+        kf = KFold(n_splits = num)
+        kf.get_n_splits(X)
+        for train_index, test_index in kf.split(X):
+            X_train = X.iloc[train_index]
+            X_test = X.iloc[test_index]
+            output.append(TrainTest(X_train, X_test))
+        return output
+
+    def RMSPE(self) -> float:
+        """
+        Root Mean Squared Predication Error
+        """
+        # Count => Y_hat, Actual => Y
+        return np.sqrt(np.mean((self.predictions['Count'] - self.predictions['Actual'])**2))
+  
+    def join_wastewater_data(self):
+        self.wastewater_data['Date']= pd.to_datetime(self.wastewater_data['Date'], dayfirst=True)
+        self.wastewater_data = self.wastewater_data.pivot(index='Date', columns='Plant')
+        self.wastewater_data.columns = self.wastewater_data.columns.droplevel(0)
+        self.wastewater_data['Date'] = self.wastewater_data.index.astype(str)
+        self.wastewater_data = self.wastewater_data.rename_axis(None)
+        self.wastewater_data = self.wastewater_data.fillna(value=0)
+        self.data = self.data.merge(self.wastewater_data, on='Date', how='left')
+
+    def clean_data(self):
+        """
+        Cleans the given data set.
+        Methodology:
+        1. For the wastewater data, 0 seems to be equivilent to NaN
+        2. Forward fill all values
+        3. Only NaN is left, so set them to 0
+        4. Try changing cummulative features to daily, set adjustments to zero
+        """
+        # cummulative = [
+        #   'Cumulative cases',
+        #   'Cumulative Vancouver Coastal',
+        #   'Cumulative Fraser Health',
+        #   'Cumulative Island Health ',
+        #   'Cumulative Interior Health',
+        #   'Cumulative Northern Health',
+        #   'Recovered'
+        # ]
+
+        # self.data.loc[:, 'Annacis Island':'Northwest Langley'] = self.data.loc[:, 'Annacis Island':'Northwest Langley'].replace(0, np.nan)
+        # self.data[cummulative] = self.data[cummulative].diff()
+        # self.data.loc[0,'Cumulative cases':'Cumulative Vancouver Coastal'] = 1
+        # self.data = self.data.fillna(method='ffill')
+        # self.data = self.data.fillna(value=0)
+
+        # # Clear the last row from fill forward
+        # self.data.loc[self.data.shape[0]-1,'New cases':] = np.nan
+
+        # # There are small adjustments/corrections in the cummulative data.
+        # numbers = self.data._get_numeric_data()
+        # numbers[numbers < 0] = 0
+
+        self.data.loc[:, 'Annacis Island':'Northwest Langley'] = self.data.loc[:, 'Annacis Island':'Northwest Langley'].fillna(value=0)
+        self.data = self.data.fillna(method='ffill')
+        self.data = self.data.fillna(value=0)
+    
+    def add_prediction(self, Y_hat, Y_test, T, D):
+        """
+        Adds the predication of the model to the predications output.
+        """
+        # Get the index of the Date:Delay signature
+        idx = self.predictions.index[self.predictions['Date:Delay'] == f'{T}:{D}'].tolist()[0]
+        self.predictions.loc[idx,'Count'] = Y_hat
+        self.predictions.loc[idx,'Actual'] = Y_test
+  
+    def get_sample_data(self, signature):
+            """
+            Returns the X' dataset based on the signature 'YYYY-MM-DD:PD'.
+            Can be used for benchmarking, tuning, and implementing models.
+            """
+            items = signature.split(':')
+            T = items[0]
+            D = int(items[1])
+            return self.construct_x_prime(T, D)[0]
+
+    def output_csv(self, model):
+        file = f'{model}_predictions.csv'
+        folder = './output'
+
+        if not os.path.exists(folder):
+          os.mkdir(folder)
+        full_path = os.path.join(folder, file)   
+
+        output_to_upload = self.predictions[['Date:Delay', 'Count']]
+        output_to_upload.to_csv(full_path, index=False)
+
+
+    
+    def run_linsvm(self, X_train, Y_train, X_test, days) -> float:
+        """
+        Returns a prediction using linear support vector regression
+        """
+        if days: 
+            X_train = X_train.tail(days)
+            Y_train = Y_train.tail(days)
+    
+        X_train = X_train.to_numpy()
+        X_test = X_test.to_numpy().reshape(1, -1)
+        Y_train = Y_train.to_numpy()
+
+        #model = LinearSVR(C=1.0, dual=True, fit_intercept=True,intercept_scaling=1.0, max_iter=10000000,random_state=None, tol=0.0001, verbose=0)
+        model = make_pipeline(StandardScaler(), LinearSVR(random_state=0, tol=1e-5, max_iter=1000))
+        #Pipeline(steps=[('standardscaler', StandardScaler()),
+                #('linearsvr', LinearSVR(random_state=0, tol=1e-05))])
+        model.fit(X_train, Y_train)
+        Y_hat = model.predict(X_test)
+        return Y_hat
+
+    def run_svm(self, X_train, Y_train, X_test, days) -> float:
+        """
+        Returns a prediction using linear support vector regression
+        """
+        if days: 
+            X_train = X_train.tail(days)
+            Y_train = Y_train.tail(days)
+    
+        X_train = X_train.to_numpy()
+        X_test = X_test.to_numpy().reshape(1, -1)
+        Y_train = Y_train.to_numpy()
+
+        #model = LinearSVR(C=1.0, dual=True, fit_intercept=True,intercept_scaling=1.0, max_iter=10000000,random_state=None, tol=0.0001, verbose=0)
+        model = make_pipeline(StandardScaler(), SVR(tol=1e-5, max_iter=1000, C=15.0, epsilon=0.1))
+        #Pipeline(steps=[('standardscaler', StandardScaler()),
+                #('linearsvr', LinearSVR(random_state=0, tol=1e-05))])
+        model.fit(X_train, Y_train)
+        Y_hat = model.predict(X_test)
+        return Y_hat
+
+
+    
+#     def run_spline(self, X_train, Y_train, X_test, days) -> float:
+#         if days: 
+#             X_train = X_train.tail(days)
+#             Y_train = Y_train.tail(days)
+
+#         X_train = X_train.to_numpy()
+#         X_test = X_test.to_numpy().reshape(1, -1)
+
+#         model = make_pipeline(SplineTransformer(n_knots=5, degree=2), Ridge(alpha=1e-3))
+#         model.fit(X_train, Y_train)
+#         Y_hat = model.predict(X_test)[0]
+#         return Y_hat
+
+#     def run_xg_boost(self, X_train, Y_train, X_test, hyper_params) -> float:
+
+#         X_train = X_train.to_numpy()
+#         Y_train = Y_train.to_numpy()
+#         X_test = X_test.to_numpy().reshape(1, -1)
+
+#         model = XGBRegressor()
+#         # model = XGBRegressor(n_estimators=hyper_params.t, max_depth=hyper_params.d, eta=hyper_params.r, subsample=hyper_params.s)
+#         model.fit(X_train, Y_train)
+#         Y_hat = model.predict(X_test)[0].tolist()
+#         return Y_hat
+
+
+    features = [
+    #     'Cumulative cases',
+    #     'Cumulative Vancouver Coastal',
+        'Hospitalization (Currently in hospital)',
+        'ICU (Currently in ICU)',
+        'Recovered',
+        'Deaths',
+    #     'Active cases',
+    #     'Annacis Island'
+    ]
+
+
+
+```
+
+
+```python
+model = Backtest()
+
+features = [
+     'Cumulative cases',
+     'Cumulative Vancouver Coastal'
+]
+
+RMSPE = model(output_predication_csv=True, model='svm', days=7, features=features)
+#days=34
+print(RMSPE)
+```
+
+    72.15956856965397
+
+
+
+```python
+for day in range(1,34):
+    #for C in np.linspace(1,5,16):
+        RMSPE = model(output_predication_csv=False, model='svm', days=day, features=features)
+        print(f'day: {day}  RMSPE: {RMSPE}')
+```
+
+    day: 1  RMSPE: 69.50420815645849
+    day: 2  RMSPE: 70.80167688698769
+    day: 3  RMSPE: 74.5216245832095
+    day: 4  RMSPE: 75.25463239126427
+    day: 5  RMSPE: 76.8489793902487
+    day: 6  RMSPE: 73.36712076597212
+    day: 7  RMSPE: 72.15956856965397
+    day: 8  RMSPE: 72.71219234323196
+    day: 9  RMSPE: 76.08715049346121
+    day: 10  RMSPE: 79.03431747140317
+    day: 11  RMSPE: 81.72552021674024
+    day: 12  RMSPE: 83.72169686530975
+    day: 13  RMSPE: 85.80265334192224
+    day: 14  RMSPE: 87.04597247590702
+    day: 15  RMSPE: 88.94680874462178
+    day: 16  RMSPE: 91.5566922400323
+    day: 17  RMSPE: 94.4330193715007
+    day: 18  RMSPE: 97.0716391264759
+    day: 19  RMSPE: 99.23208969669288
+    day: 20  RMSPE: 101.11364497413132
+    day: 21  RMSPE: 103.17070323215715
+    day: 22  RMSPE: 104.81944220173209
+    day: 23  RMSPE: 106.66717206228823
+    day: 24  RMSPE: 108.81343354795297
+    day: 25  RMSPE: 111.01422322946756
+    day: 26  RMSPE: 112.95889432888787
+    day: 27  RMSPE: 114.82770491351332
+    day: 28  RMSPE: 116.50724624720122
+    day: 29  RMSPE: 118.2452816888885
+    day: 30  RMSPE: 120.08936732002269
+    day: 31  RMSPE: 121.99327444261196
+    day: 32  RMSPE: 123.78063081697044
+    day: 33  RMSPE: 125.39711227945102
+
+
+
+```python
+
+```

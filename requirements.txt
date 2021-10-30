@@ -5,3 +5,5 @@ scikit-learn
 seaborn
 matplotlib
 xgboost
+Pillow
+scikit-image

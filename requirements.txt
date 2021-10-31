@@ -7,3 +7,5 @@ matplotlib
 xgboost
 Pillow
 scikit-image
+feature-engine
+scipy
